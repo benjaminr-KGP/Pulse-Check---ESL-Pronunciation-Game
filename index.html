@@ -305,24 +305,30 @@
     return dp[m][n];
   }
 
-  function wordSimilarity(target, heard){
-    var t = normalize(target), h = normalize(heard);
-    if (!h) return 0;
-    var dist = levenshtein(t, h);
-    var maxLen = Math.max(t.length, h.length, 1);
-    return 1 - dist / maxLen;
-  }
-
   function wordsClose(a, b){
     if (a === b) return true;
     if (Math.min(a.length, b.length) <= 3) return a === b;
     return levenshtein(a, b) <= 1;
   }
 
+  // Allowed edit-distance is a flat, capped number rather than a percentage
+  // Allowed edit-distance scales UP with word length, not down. The
+  // recognizer's own transcription accuracy drops on longer/rarer words
+  // regardless of pronunciation quality (less training data to draw on),
+  // so longer/harder words need more tolerance for that noise, not less.
+  // Difficulty nudges the tolerance by one step either way.
+  function maxAllowedDistance(len, difficulty){
+    var base = Math.max(1, Math.round(len * 0.25)); // roughly 1 edit per 4 letters
+    if (difficulty === 'easy') return Math.max(1, base - 1);
+    if (difficulty === 'hard') return base + 1;
+    return base; // medium
+  }
+
   function isWordMatch(target, heard, difficulty){
-    var sim = wordSimilarity(target, heard);
-    var threshold = difficulty === 'hard' ? 0.85 : difficulty === 'easy' ? 0.65 : 0.75;
-    return sim >= threshold;
+    var t = normalize(target), h = normalize(heard);
+    if (!h) return false;
+    var dist = levenshtein(t, h);
+    return dist <= maxAllowedDistance(t.length, difficulty);
   }
 
   function sentenceSimilarity(target, heard){
