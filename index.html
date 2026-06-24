@@ -79,6 +79,8 @@
   .mic-wrap{display:flex;flex-direction:column;align-items:center;gap:10px;padding-bottom:6px;}
   .mic-btn{width:clamp(120px,32vw,160px);height:clamp(120px,32vw,160px);border-radius:50%;border:3px solid var(--accent);background:var(--surface-2);display:flex;align-items:center;justify-content:center;font-size:clamp(40px,10vw,56px);cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none;transition:transform .1s, box-shadow .15s, background .15s;}
   .mic-btn.active{background:var(--accent);transform:scale(1.06);box-shadow:0 0 0 14px rgba(45,212,196,.15);}
+  .mic-btn.checking{background:var(--surface-2);border-color:var(--warning);opacity:.6;cursor:wait;pointer-events:none;animation:checkingPulse 0.9s ease-in-out infinite;}
+  @keyframes checkingPulse{0%,100%{opacity:.55;}50%{opacity:.85;}}
   .mic-hint{color:var(--text-muted);font-size:13px;text-align:center;}
   .score-line{text-align:center;font-family:var(--mono);font-size:13px;color:var(--text-muted);margin-top:14px;}
 
@@ -93,6 +95,7 @@
   @media (prefers-reduced-motion: reduce){
     .pulse-wrap.spike{animation:none;}
     .mic-btn{transition:none;}
+    .mic-btn.checking{animation:none;}
   }
 </style>
 </head>
@@ -189,14 +192,17 @@
   "use strict";
 
   /* ============================================================
-     TEACHER CONFIG — edit these two numbers before each class.
-     Every student who loads this page gets the exact same round
-     length, so scores stay comparable when you write them on the
-     board. No UI control for this on purpose.
+     TEACHER CONFIG — edit these before each class.
+     Round lengths: every student gets the exact same value, so
+     scores stay comparable when you write them on the board.
+     No UI control for these on purpose.
      ============================================================ */
   var CONFIG = {
     wordRoundSeconds: 75,       // round length when "Words" mode is selected
-    sentenceRoundSeconds: 150   // round length when "Sentences" mode is selected
+    sentenceRoundSeconds: 150,  // round length when "Sentences" mode is selected
+    releaseBufferMs: 300        // grace period after releasing the mic button
+                                 // before recognition actually stops — avoids
+                                 // cutting off the tail end of a word
   };
 
   /* ---------------- Sample content ---------------- */
@@ -535,11 +541,14 @@
   }
 
   /* ---------------- Mic / recognition handling ---------------- */
+  var releaseTimer = null;
+
   function startListening(){
     if (!SR_SUPPORTED || state.listening || state.busy || !state.running) return;
     state.listening = true;
     lastFinalTranscript = '';
     setHeard('Listening…', 'live');
+    micBtn.classList.remove('checking');
     micBtn.classList.add('active');
     try { recognition.start(); } catch(e) { /* ignore if engine already mid-cycle */ }
 
@@ -550,11 +559,21 @@
   }
 
   function stopListening(){
-    if (!SR_SUPPORTED || !state.listening) return;
+    if (!SR_SUPPORTED || !state.listening || state.busy) return;
+    // Released — but don't tell the engine to stop just yet. A short
+    // buffer here gives the tail end of the word (and any network lag)
+    // time to actually be captured, instead of getting cut off right at
+    // the moment of release. The button shows a distinct "checking" look
+    // for this whole window so it's never mistaken for "ready to press".
     micBtn.classList.remove('active');
+    micBtn.classList.add('checking');
+    setHeard('Checking…', 'live');
     state.busy = true;
     if (watchdogHandle) { clearTimeout(watchdogHandle); watchdogHandle = null; }
-    try { recognition.stop(); } catch(e) { state.listening = false; state.busy = false; }
+    releaseTimer = setTimeout(function(){
+      try { recognition.stop(); }
+      catch(e) { state.listening = false; state.busy = false; micBtn.classList.remove('checking'); }
+    }, CONFIG.releaseBufferMs);
   }
 
   if (SR_SUPPORTED){
@@ -565,7 +584,7 @@
         if (e.results[i].isFinal) final += tr; else interim += tr;
       }
       if (final) lastFinalTranscript = final.trim();
-      if (state.running) setHeard(final || interim || '…', 'live');
+      if (state.running && !state.busy) setHeard(final || interim || '…', 'live');
     };
 
     recognition.onerror = function(e){
@@ -584,6 +603,7 @@
     recognition.onend = function(){
       state.listening = false;
       state.busy = false;
+      micBtn.classList.remove('checking');
       evaluateAttempt(lastFinalTranscript);
     };
   }
